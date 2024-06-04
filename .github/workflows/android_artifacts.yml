@@ -6,7 +6,7 @@ on:
     inputs:
       dry_run:
         description: "When true, don't upload to Sonatype"
-        default: false
+        default: true
         required: false
         type: boolean
       runner:
