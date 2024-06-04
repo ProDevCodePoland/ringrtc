@@ -120,7 +120,7 @@ afterEvaluate {
     }
 
     signing {
-        required { isReleaseVersion && gradle.taskGraph.hasTask(getPath() + ":publishToSonatype") }
+//        required { isReleaseVersion && gradle.taskGraph.hasTask(getPath() + ":publishToSonatype") }
 
         def signingKeyId = findProperty("signingKeyId")
         def signingKey = findProperty("signingKey")
