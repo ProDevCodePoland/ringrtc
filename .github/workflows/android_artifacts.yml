@@ -39,7 +39,7 @@ jobs:
       - run: ./bin/fetch-artifact --platform android --release
 
       - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
-      
+
       - name: Publish artifact
         uses: actions/upload-artifact@v4 
         with:
