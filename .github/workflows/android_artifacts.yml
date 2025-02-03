@@ -11,14 +11,8 @@ on:
         type: boolean
       runner:
         description: "Linux runner:"
-        default: 'ubuntu-22.04-4-cores'
+        default: 'ubuntu-latest'
         required: true
-        type: choice
-        options:
-          - 'ubuntu-22.04'
-          - 'ubuntu-22.04-4-cores'
-          - 'ubuntu-22.04-8-cores'
-
 env:
   CARGO_TERM_COLOR: always
   NDK_VERSION: '27.0.12077973'
