@@ -137,18 +137,20 @@ pub trait Platform: sfu::Delegate + fmt::Debug + fmt::Display + Send + Sized + '
     /// signaling channel.
     fn send_call_message(
         &self,
-        recipient_uuid: Vec<u8>,
+        recipient_id: Vec<u8>,
         message: Vec<u8>,
         urgency: group_call::SignalingMessageUrgency,
     ) -> Result<()>;
 
-    /// Send a generic call message to all other members of a group using the
-    /// signaling channel.
+    /// Send a generic call message to a group. Send to all members of the group
+    /// or, if recipients_override is not empty, send to the given subset of members
+    /// using multi-recipient sealed sender.
     fn send_call_message_to_group(
         &self,
         group_id: Vec<u8>,
         message: Vec<u8>,
         urgency: group_call::SignalingMessageUrgency,
+        recipients_override: HashSet<UserId>,
     ) -> Result<()>;
 
     /// Create a platform dependent media stream from the base WebRTC
@@ -251,6 +253,12 @@ pub trait Platform: sfu::Delegate + fmt::Debug + fmt::Display + Send + Sized + '
         joined_members: &HashSet<UserId>,
     );
 
+    fn handle_speaking_notification(
+        &self,
+        client_id: group_call::ClientId,
+        event: group_call::SpeechEvent,
+    );
+
     fn handle_audio_levels(
         &self,
         _client_id: group_call::ClientId,
@@ -264,6 +272,8 @@ pub trait Platform: sfu::Delegate + fmt::Debug + fmt::Display + Send + Sized + '
     fn handle_reactions(&self, client_id: group_call::ClientId, reactions: Vec<Reaction>);
 
     fn handle_raised_hands(&self, client_id: group_call::ClientId, raised_hands: Vec<DemuxId>);
+
+    fn handle_rtc_stats_report(&self, _report_json: String) {}
 
     fn handle_ended(&self, client_id: group_call::ClientId, reason: group_call::EndReason);
 }

@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-// Modules for the testing service, from protobufs compiled by tonic.
 pub mod calling {
     #![allow(clippy::derive_partial_eq_without_eq, clippy::enum_variant_names)]
-    tonic::include_proto!("calling");
+    protobuf::include_call_sim_proto!();
 }
-
 use anyhow::Result;
 use calling::{
     command_message::Command, test_management_client::TestManagementClient, CommandMessage, Empty,
@@ -25,7 +23,6 @@ use std::{
 use tonic::transport::Channel;
 use tower::timeout::Timeout;
 
-use crate::audio::{chop_audio_and_analyze, get_audio_and_analyze, AudioFiles};
 use crate::common::{
     AudioAnalysisMode, GroupConfig, NetworkConfigWithOffset, NetworkProfile, TestCaseConfig,
 };
@@ -37,6 +34,10 @@ use crate::docker::{
     start_turn_server, DockerStats,
 };
 use crate::report::{AnalysisReport, AnalysisReportMos, Report};
+use crate::{
+    audio::{chop_audio_and_analyze, get_audio_and_analyze, AudioFiles},
+    common::ClientProfile,
+};
 
 pub struct Client<'a> {
     pub name: &'a str,
@@ -66,6 +67,15 @@ pub struct AudioTestResults {
     pub pesq_mos: AnalysisReportMos,
     /// MOS analysis using plc.
     pub plc_mos: AnalysisReportMos,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallTypeConfig {
+    Group {
+        sfu_url: String,
+        group_name: Option<String>,
+    },
+    Direct,
 }
 
 pub struct TestCase<'a> {
@@ -134,6 +144,10 @@ pub struct Test {
 
     group_runs: Vec<GroupRun>,
 
+    // TODO: maybe relocate to test case
+    client_profiles: Vec<ClientProfile>,
+    call_type: CallTypeConfig,
+
     // Keep track of all reference files used by copying them into the test
     // directory, converting them if necessary (and avoiding duplicates if
     // multiple runs use the same media). This way the test results have full
@@ -142,12 +156,21 @@ pub struct Test {
     videos: HashMap<String, Video>,
 }
 
+pub struct MediaFileIo {
+    pub audio_input_file: String,
+    pub audio_output_file: String,
+    pub video_input_file: Option<String>,
+    pub video_output_file: Option<String>,
+}
+
 impl Test {
     pub fn new(
         root_path: &PathBuf,
         output_dir: &str,
         media_dir: &str,
         set_name: &str,
+        client_profiles: Vec<ClientProfile>,
+        call_type: CallTypeConfig,
     ) -> Result<Self> {
         let time_started = chrono::Local::now();
 
@@ -179,6 +202,9 @@ impl Test {
             group_runs: vec![],
             sounds: HashMap::new(),
             videos: HashMap::new(),
+
+            client_profiles,
+            call_type,
         })
     }
 
@@ -248,23 +274,31 @@ impl Test {
 
             start_cli(
                 test_case.client_a.name,
-                &test_case.client_a.sound.raw(),
-                &test_case.client_a.output_raw,
-                test_case.client_a.video.map(|v| v.raw()).as_deref(),
-                test_case.client_a.output_yuv.as_deref(),
+                MediaFileIo {
+                    audio_input_file: test_case.client_a.sound.raw(),
+                    audio_output_file: test_case.client_a.output_raw.clone(),
+                    video_input_file: test_case.client_a.video.map(|v| v.raw()),
+                    video_output_file: test_case.client_a.output_yuv.clone(),
+                },
                 &test_case_config.client_a_config,
                 &test_case_config.client_b_config,
+                &self.client_profiles[0],
+                &self.call_type,
             )
             .await?;
 
             start_cli(
                 test_case.client_b.name,
-                &test_case.client_b.sound.raw(),
-                &test_case.client_b.output_raw,
-                test_case.client_b.video.map(|v| v.raw()).as_deref(),
-                test_case.client_b.output_yuv.as_deref(),
+                MediaFileIo {
+                    audio_input_file: test_case.client_b.sound.raw(),
+                    audio_output_file: test_case.client_b.output_raw.clone(),
+                    video_input_file: test_case.client_b.video.map(|v| v.raw()),
+                    video_output_file: test_case.client_b.output_yuv.clone(),
+                },
                 &test_case_config.client_b_config,
                 &test_case_config.client_a_config,
+                &self.client_profiles[1],
+                &self.call_type,
             )
             .await?;
 
@@ -820,7 +854,7 @@ impl Test {
         &mut self,
         group_config: GroupConfig,
         tests: Vec<TestCaseConfig>,
-        profiles: Vec<NetworkProfile>,
+        network_profiles: Vec<NetworkProfile>,
     ) -> Result<()> {
         let mut reports: Vec<Result<Report>> = vec![];
 
@@ -843,7 +877,7 @@ impl Test {
                 self.process_video(b_to_a_video).await?;
             }
 
-            for network_profile in &profiles {
+            for network_profile in &network_profiles {
                 for i in 1..=test.iterations {
                     let report_name = format!(
                         "{}-{}-{}",

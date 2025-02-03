@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use chrono;
+use clap::Parser;
 use log::{debug, info};
 
-use ringrtc::lite::sfu::DemuxId;
 use ringrtc::{
     common::{
         actor::{Actor, Stopper},
@@ -13,7 +14,10 @@ use ringrtc::{
         CallConfig, CallId, CallMediaType, DataMode, DeviceId, Result,
     },
     core::{call_manager::CallManager, group_call, signaling},
-    lite::{http, sfu::UserId},
+    lite::{
+        http,
+        sfu::{DemuxId, UserId},
+    },
     native::{
         CallState, CallStateHandler, GroupUpdate, GroupUpdateHandler, NativeCallContext,
         NativePlatform, PeerId, SignalingSender,
@@ -28,13 +32,28 @@ use ringrtc::{
         media::{VideoFrame, VideoPixelFormat, VideoSink, VideoSource},
         network::NetworkInterfaceType,
         peer_connection::AudioLevel,
-        peer_connection_factory::{self as pcf, IceServer, PeerConnectionFactory},
+        peer_connection_factory::{
+            self as pcf, IceServer, PeerConnectionFactory, RffiAudioDeviceModuleType,
+        },
         peer_connection_observer::NetworkRoute,
     },
 };
-use std::{collections::HashMap, thread, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    thread,
+    time::Duration,
+};
+
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(long)]
+    use_ringrtc_adm: bool,
+}
 
 fn main() {
+    let args = Args::parse();
+
     log::set_logger(&LOG).expect("set logger");
     log::set_max_level(log::LevelFilter::Debug);
 
@@ -54,7 +73,7 @@ fn main() {
     let good_link = LinkConfig {
         delay_min: Duration::from_millis(10),
         delay_max: Duration::from_millis(20),
-        loss_probabilty: 0.00,
+        loss_probability: 0.00,
         repeated_loss_probability: 0.00,
         rate: DataRate::from_mbps(5),
         queue_size: DataRate::from_mbps(5) * Duration::from_millis(500),
@@ -62,7 +81,7 @@ fn main() {
     let bad_link = LinkConfig {
         delay_min: Duration::from_millis(100),
         delay_max: Duration::from_millis(200),
-        loss_probabilty: 0.005,
+        loss_probability: 0.005,
         repeated_loss_probability: 0.70,
         rate: DataRate::from_kbps(256),
         queue_size: DataRate::from_kbps(256) * Duration::from_secs(500),
@@ -82,6 +101,7 @@ fn main() {
         &signaling_server,
         &router,
         &stopper,
+        args.use_ringrtc_adm,
     )
     .expect("Start caller");
     caller.add_network_interface(
@@ -110,6 +130,7 @@ fn main() {
         &signaling_server,
         &router,
         &stopper,
+        args.use_ringrtc_adm,
     )
     .expect("Start callee");
     callee.add_network_interface(
@@ -141,6 +162,7 @@ fn main() {
                 &signaling_server,
                 &router,
                 &stopper,
+                args.use_ringrtc_adm,
             )
             .expect("Start ignored callee");
             callee.add_network_interface(
@@ -234,6 +256,7 @@ impl CallEndpoint {
         signaling_server: &SignalingServer,
         router: &Router,
         stopper: &Stopper,
+        use_ringrtc_adm: bool,
     ) -> Result<Self> {
         let peer_id = PeerId::from(peer_id);
 
@@ -256,7 +279,11 @@ impl CallEndpoint {
                     // Option<CallManager> thing that we have to set later.
                     let endpoint = Self::from_actor(peer_id.clone(), device_id, actor.clone());
 
-                    let mut pcf = PeerConnectionFactory::new(&pcf::AudioConfig::default(), true)?; // Set up packet flow
+                    let mut audio_config = pcf::AudioConfig::default();
+                    if use_ringrtc_adm {
+                        audio_config.audio_device_module_type = RffiAudioDeviceModuleType::RingRtc;
+                    }
+                    let mut pcf = PeerConnectionFactory::new(&audio_config, true)?; // Set up packet flow
                     info!(
                         "Audio playout devices: {:?}",
                         pcf.get_audio_playout_devices()
@@ -559,6 +586,7 @@ impl SignalingSender for CallEndpoint {
         _group_id: group_call::GroupId,
         _msg: Vec<u8>,
         _urgency: group_call::SignalingMessageUrgency,
+        _recipients_override: HashSet<UserId>,
     ) -> Result<()> {
         unimplemented!()
     }
@@ -623,6 +651,14 @@ impl CallStateHandler for CallEndpoint {
         info!(
             "Not enough bandwidth to send video reliably for {} => {}: recovered: {}",
             self.peer_id, remote_peer_id, recovered
+        );
+        Ok(())
+    }
+
+    fn handle_remote_audio_state(&self, remote_peer_id: &str, enabled: bool) -> Result<()> {
+        info!(
+            "Audio State for {} => {}: {}",
+            self.peer_id, remote_peer_id, enabled
         );
         Ok(())
     }
@@ -750,7 +786,14 @@ impl log::Log for Log {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            println!("{} - {}", record.level(), record.args());
+            println!(
+                "[{} {} {:?}:{:?}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.level(),
+                record.file(),
+                record.line(),
+                record.args()
+            );
         }
     }
 

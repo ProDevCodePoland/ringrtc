@@ -3,17 +3,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
-mod support {
-    pub mod http_client;
-}
-use support::http_client;
+use ringrtc::lite::http::sim as sim_http;
 
+use log::info;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use log::info;
-
-use ringrtc::core::group_call::Reaction;
+use ringrtc::core::group_call::{Reaction, SpeechEvent};
 use ringrtc::{
     common::units::DataRate,
     core::{
@@ -91,7 +87,17 @@ impl group_call::Observer for Observer {
         _message: ringrtc::protobuf::signaling::CallMessage,
         _urgency: ringrtc::core::group_call::SignalingMessageUrgency,
     ) {
-        // This isn't going to work :(.  Better turn of frame crypto.
+        // This isn't going to work :(.  Better turn off frame crypto.
+    }
+
+    fn send_signaling_message_to_group(
+        &mut self,
+        _group: group_call::GroupId,
+        _message: protobuf::signaling::CallMessage,
+        _urgency: group_call::SignalingMessageUrgency,
+        _recipients_override: HashSet<UserId>,
+    ) {
+        unimplemented!()
     }
 
     fn handle_incoming_video_track(
@@ -107,21 +113,16 @@ impl group_call::Observer for Observer {
         info!("Ended with reason {:?}", reason);
     }
 
-    fn send_signaling_message_to_group(
-        &mut self,
-        _group: group_call::GroupId,
-        _message: protobuf::signaling::CallMessage,
-        _urgency: group_call::SignalingMessageUrgency,
-    ) {
-        unimplemented!()
-    }
-
     fn handle_network_route_changed(
         &self,
         _client_id: ClientId,
         _network_route: ringrtc::webrtc::peer_connection_observer::NetworkRoute,
     ) {
         // ignore
+    }
+
+    fn handle_speaking_notification(&mut self, _client_id: ClientId, event: SpeechEvent) {
+        info!("Speaking {:?}", event);
     }
 
     fn handle_audio_levels(
@@ -143,6 +144,10 @@ impl group_call::Observer for Observer {
 
     fn handle_raised_hands(&self, _client_id: ClientId, raised_hands: Vec<DemuxId>) {
         info!("Raised hands changed to {:?}", raised_hands);
+    }
+
+    fn handle_rtc_stats_report(&self, _report_json: String) {
+        // ignore
     }
 }
 
@@ -194,7 +199,7 @@ fn main() {
     ringrtc::webrtc::logging::set_logger(log::LevelFilter::Info);
 
     let group_id = b"Test Group".to_vec();
-    let http_client = http_client::HttpClient::start();
+    let http_client = sim_http::HttpClient::start();
     let sfu_client = Box::new(HttpSfuClient::new(
         Box::new(http_client),
         url.to_string(),
@@ -217,21 +222,22 @@ fn main() {
         .unwrap();
     let busy = Arc::new(CallMutex::new(false, "busy"));
     let self_uuid = Arc::new(CallMutex::new(None, "self_uuid"));
-    let client = group_call::Client::start(
+
+    let client = group_call::Client::start(group_call::ClientStartParams {
         group_id,
-        1,
-        group_call::GroupCallKind::SignalGroup,
+        client_id: 1,
+        kind: group_call::GroupCallKind::SignalGroup,
         sfu_client,
-        Box::new(observer.clone()),
+        observer: Box::new(observer.clone()),
         busy,
         self_uuid,
-        None,
+        peer_connection_factory: None,
         outgoing_audio_track,
-        Some(outgoing_video_track.clone()),
-        Some(Box::new(observer.clone())),
-        None,
-        None,
-    )
+        outgoing_video_track: Some(outgoing_video_track.clone()),
+        incoming_video_sink: Some(Box::new(observer.clone())),
+        ring_id: None,
+        audio_levels_interval: None,
+    })
     .unwrap();
 
     let send_rate_override = DataRate::from_mbps(10);

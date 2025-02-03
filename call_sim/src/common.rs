@@ -101,7 +101,7 @@ impl ChartDimension {
                 ("Video Send Delay Per Packet", "milliseconds")
             }
             ChartDimension::VideoSendNackCount => ("Received Nack Count", "NACKs"),
-            ChartDimension::VideoSendPliCount => ("Recieved PLI Count", "PLIs"),
+            ChartDimension::VideoSendPliCount => ("Received PLI Count", "PLIs"),
             ChartDimension::VideoSendRemotePacketLoss => ("Video Remote Packet Loss", "%"),
             ChartDimension::VideoSendRemoteJitter => ("Video Remote Jitter", "milliseconds"),
             ChartDimension::VideoSendRemoteRoundTripTime => ("Video Remote RTT", "milliseconds"),
@@ -379,8 +379,6 @@ pub struct AudioConfig {
     pub enable_fec: bool,
     /// Flag to enable transport-wide congestion control for audio.
     pub enable_tcc: bool,
-    /// Flag to enabled redundant packets to be sent for audio.
-    pub enable_red: bool,
     /// Flag to enable WebRTC's high pass filter.
     pub enable_high_pass_filter: bool,
     /// Flag to enable WebRTC's acoustic echo cancellation.
@@ -442,7 +440,6 @@ impl Default for AudioConfig {
             enable_dtx: true,
             enable_fec: true,
             enable_tcc: false,
-            enable_red: false,
             enable_high_pass_filter: true,
             // Default tests now disable AEC in order to prevent random timing delays
             // from causing double-talk and thus attenuating valid audio.
@@ -827,4 +824,30 @@ impl NetworkProfile {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientProfile {
+    pub user_id: String,
+    pub device_id: String,
+    pub groups: Vec<Group>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    // friendly name for group, expected to be unique in config file
+    pub name: String,
+    // Base64 encoded
+    pub id: String,
+    pub membership_proof: String,
+    pub members: Vec<GroupMember>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMember {
+    pub user_id: String,
+    pub member_id: String,
 }

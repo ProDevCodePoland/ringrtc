@@ -12,6 +12,8 @@ import androidx.annotation.Nullable;
 
 import android.os.Build;
 
+import android.media.AudioManager;
+
 import org.webrtc.AudioSource;
 import org.webrtc.AudioTrack;
 import org.webrtc.ContextUtils;
@@ -33,6 +35,7 @@ import org.webrtc.VideoTrack;
 import org.webrtc.VideoSink;
 import org.webrtc.audio.AudioDeviceModule;
 import org.webrtc.audio.JavaAudioDeviceModule;
+import org.webrtc.audio.OboeAudioDeviceModule;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -50,6 +53,7 @@ import java.util.UUID;
  *
  */
 public class CallManager {
+  public static final  int     INVALID_AUDIO_SESSION_ID = -1;
 
   @NonNull
   private static final String  TAG = CallManager.class.getSimpleName();
@@ -105,9 +109,9 @@ public class CallManager {
       BuildInfo buildInfo = ringrtcGetBuildInfo();
 
       Map<String, String> fieldTrialsWithDefaults = new HashMap<>();
-      fieldTrialsWithDefaults.put("WebRTC-Audio-OpusSetSignalVoiceWithDtx", "Enabled");
       fieldTrialsWithDefaults.put("RingRTC-PruneTurnPorts", "Enabled");
       fieldTrialsWithDefaults.put("WebRTC-Bwe-ProbingConfiguration", "skip_if_est_larger_than_fraction_of_max:0.99");
+      fieldTrialsWithDefaults.put("WebRTC-IncreaseIceCandidatePriorityHostSrflx", "Enabled");
       fieldTrialsWithDefaults.putAll(fieldTrials);
 
       String fieldTrialsString = buildFieldTrialsString(fieldTrialsWithDefaults);
@@ -164,12 +168,20 @@ public class CallManager {
     }
   }
 
+  /// Defines the method to use for audio processing of AEC and NS.
+  public enum AudioProcessingMethod {
+    Default,
+    ForceHardware,
+    ForceSoftwareAec3
+  }
+
   /// Creates a PeerConnectionFactory appropriate for our use of WebRTC.
   ///
   /// If `eglBase` is present, hardware codecs will be used unless they are known to be broken
   /// in some way. Otherwise, we'll fall back to software codecs.
   private PeerConnectionFactory createPeerConnectionFactory(@Nullable EglBase               eglBase,
-                                                                      AudioProcessingMethod audioProcessingMethod) {
+                                                                      AudioProcessingMethod audioProcessingMethod,
+                                                                      boolean               useOboe) {
     Set<String> HARDWARE_ENCODING_BLOCKLIST = new HashSet<String>() {{
       // Samsung S6 with Exynos 7420 SoC
       add("SM-G920F");
@@ -220,62 +232,50 @@ public class CallManager {
       decoderFactory = new DefaultVideoDecoderFactory(eglBase.getEglBaseContext());
     }
 
-    // This is a workaround to what appears to a bug in WebRTC. If you don't call
-    // setAudioDeviceModule, then the default ADM created by WebRTC will not have
-    // .release() called, and the ADM will be leaked. This also lets us control the
-    // use of hardware or software voice processing.
-    JavaAudioDeviceModule adm = createAudioDeviceModule(audioProcessingMethod);
-    PeerConnectionFactory factory = PeerConnectionFactory.builder()
-            .setOptions(new PeerConnectionFactoryOptions())
-            .setAudioDeviceModule(adm)
-            .setVideoEncoderFactory(encoderFactory)
-            .setVideoDecoderFactory(decoderFactory)
-            .createPeerConnectionFactory();
-    adm.release();
-    return factory;
-  }
-
-  /// Defines the method to use for audio processing of AEC and NS.
-  public enum AudioProcessingMethod {
-    Default,
-    ForceHardware,
-    ForceSoftwareAec3,
-    ForceSoftwareAecM
-  }
-
-  static JavaAudioDeviceModule createAudioDeviceModule(AudioProcessingMethod audioProcessingMethod) {
     // We'll set both AEC and NS equally to be either both hardware or
     // both software, assuming that they are co-tuned.
-    boolean useHardware;
-    boolean useAecM;
+    boolean useHardware = audioProcessingMethod != AudioProcessingMethod.ForceSoftwareAec3;
 
-    switch(audioProcessingMethod) {
-      case ForceSoftwareAecM:
-        useHardware = false;
-        useAecM = true;
-        break;
-      case ForceSoftwareAec3:
-        useHardware = false;
-        useAecM = false;
-        break;
-      default:
-        useHardware = true;
-        useAecM = false;
-        break;
-    }
-
-    Log.i(TAG, "createAudioDeviceModule(): useHardware: " + useHardware + " useAecM: " + useAecM);
+    Log.i(TAG, "createPeerConnectionFactory(): useHardware: " + useHardware + " useOboe: " + useOboe);
 
     // ContextUtils.getApplicationContext() is deprecated;
     // we're supposed to have a Context on hand instead.
     @SuppressWarnings("deprecation")
     Context context = ContextUtils.getApplicationContext();
 
-    return JavaAudioDeviceModule.builder(context)
-      .setUseHardwareAcousticEchoCanceler(useHardware)
-      .setUseHardwareNoiseSuppressor(useHardware)
-      .setUseAecm(useAecM)
-      .createAudioDeviceModule();
+    if (useOboe) {
+      // Use the Oboe Audio Device Module.
+      OboeAudioDeviceModule adm = OboeAudioDeviceModule.builder()
+        .setUseSoftwareAcousticEchoCanceler(!useHardware)
+        .setUseSoftwareNoiseSuppressor(!useHardware)
+        .setExclusiveSharingMode(true)
+        .setAudioSessionId(INVALID_AUDIO_SESSION_ID)
+        .createAudioDeviceModule();
+
+      PeerConnectionFactory factory = PeerConnectionFactory.builder()
+              .setOptions(new PeerConnectionFactoryOptions())
+              .setAudioDeviceModule(adm)
+              .setVideoEncoderFactory(encoderFactory)
+              .setVideoDecoderFactory(decoderFactory)
+              .createPeerConnectionFactory();
+      adm.release();
+      return factory;
+    } else {
+      // The legacy Java Audio Device Module is deprecated.
+      JavaAudioDeviceModule adm = JavaAudioDeviceModule.builder(context)
+        .setUseHardwareAcousticEchoCanceler(useHardware)
+        .setUseHardwareNoiseSuppressor(useHardware)
+        .createAudioDeviceModule();
+
+      PeerConnectionFactory factory = PeerConnectionFactory.builder()
+              .setOptions(new PeerConnectionFactoryOptions())
+              .setAudioDeviceModule(adm)
+              .setVideoEncoderFactory(encoderFactory)
+              .setVideoDecoderFactory(decoderFactory)
+              .createPeerConnectionFactory();
+      adm.release();
+      return factory;
+    }
   }
 
   private void checkCallManagerExists() {
@@ -389,6 +389,7 @@ public class CallManager {
    * @param context                Call service context
    * @param eglBase                eglBase to use for this Call
    * @param audioProcessingMethod  the method to use for audio processing
+   * @param useOboe                whether to use the oboe-based audio device module, otherwise use java
    * @param localSink              local video sink to use for this Call
    * @param remoteSink             remote video sink to use for this Call
    * @param camera                 camera control to use for this Call
@@ -405,6 +406,7 @@ public class CallManager {
                       @NonNull  Context                        context,
                       @NonNull  EglBase                        eglBase,
                                 AudioProcessingMethod          audioProcessingMethod,
+                                boolean                        useOboe,
                       @NonNull  VideoSink                      localSink,
                       @NonNull  VideoSink                      remoteSink,
                       @NonNull  CameraControl                  camera,
@@ -424,7 +426,7 @@ public class CallManager {
       }
     }
 
-    PeerConnectionFactory factory = this.createPeerConnectionFactory(eglBase, audioProcessingMethod);
+    PeerConnectionFactory factory = this.createPeerConnectionFactory(eglBase, audioProcessingMethod, useOboe);
 
     CallContext callContext = new CallContext(callId,
                                               context,
@@ -788,6 +790,8 @@ public class CallManager {
 
     Connection connection = ringrtcGetActiveConnection(nativeCallManager);
     connection.setAudioEnabled(enable);
+
+    ringrtcSetAudioEnable(nativeCallManager, enable);
   }
 
   /**
@@ -978,7 +982,8 @@ public class CallManager {
    * CallLinkSecretParams secretParams = CallLinkSecretParams.deriveFromRootKey(linkKey.getKeyBytes());
    * byte[] credentialPresentation = credential.present(roomId, secretParams).serialize();
    * byte[] serializedPublicParams = secretParams.getPublicParams().serialize();
-   * callManager.createCallLink(sfuUrl, credentialPresentation, linkKey, adminPasskey, serializedPublicParams, result -> {
+   * CallLinkState.Restrictions restrictions = CallLinkState.Restrictions.NONE;
+   * callManager.createCallLink(sfuUrl, credentialPresentation, linkKey, adminPasskey, serializedPublicParams, restrictions, result -> {
    *   if (result.isSuccess()) {
    *     CallLinkState state = result.getValue();
    *     // In actuality you may not want to do this until the user clicks Done.
@@ -1012,6 +1017,7 @@ public class CallManager {
     @NonNull CallLinkRootKey                            linkRootKey,
     @NonNull byte[]                                     adminPasskey,
     @NonNull byte[]                                     callLinkPublicParams,
+    @NonNull CallLinkState.Restrictions                 restrictions,
     @NonNull ResponseHandler<HttpResult<CallLinkState>> handler)
     throws CallException
   {
@@ -1019,7 +1025,7 @@ public class CallManager {
     Log.i(TAG, "createCallLink():");
 
     long requestId = this.callLinkRequests.add(handler);
-    ringrtcCreateCallLink(nativeCallManager, sfuUrl, createCredentialPresentation, linkRootKey.getKeyBytes(), adminPasskey, callLinkPublicParams, requestId);
+    ringrtcCreateCallLink(nativeCallManager, sfuUrl, createCredentialPresentation, linkRootKey.getKeyBytes(), adminPasskey, callLinkPublicParams, restrictions.ordinal(), requestId);
   }
 
   /**
@@ -1165,7 +1171,7 @@ public class CallManager {
       if (result.isSuccess()) {
         handler.handleResponse(result.getValue());
       } else {
-        handler.handleResponse(new PeekInfo(Collections.emptyList(), null, null, null, 0, 0, Collections.emptyList()));
+        handler.handleResponse(new PeekInfo(Collections.emptyList(), null, null, null, 0, 0, Collections.emptyList(), null));
       }
     });
     ringrtcPeekGroupCall(nativeCallManager, requestId, sfuUrl, membershipProof, Util.serializeFromGroupMemberInfo(groupMembers));
@@ -1219,6 +1225,7 @@ public class CallManager {
    * @param hkdfExtraInfo          additional entropy to use for the connection with the SFU (it's okay if this is empty)
    * @param audioLevelsIntervalMs  if provided, the observer will receive audio level callbacks at this interval
    * @param audioProcessingMethod  the method to use for audio processing
+   * @param useOboe                whether to use the oboe-based audio device module, otherwise use java
    * @param observer               the observer that the group call object will use for callback notifications
    *
    */
@@ -1228,13 +1235,14 @@ public class CallManager {
                                    @NonNull  byte[]                hkdfExtraInfo,
                                    @Nullable Integer               audioLevelsIntervalMs,
                                              AudioProcessingMethod audioProcessingMethod,
+                                             boolean               useOboe,
                                    @NonNull  GroupCall.Observer    observer)
   {
     checkCallManagerExists();
 
     if (this.groupFactory == null) {
       // The first GroupCall object will create a factory that will be re-used.
-      this.groupFactory = this.createPeerConnectionFactory(null, audioProcessingMethod);
+      this.groupFactory = this.createPeerConnectionFactory(null, audioProcessingMethod, useOboe);
       if (this.groupFactory == null) {
         Log.e(TAG, "createPeerConnectionFactory failed");
         return null;
@@ -1265,6 +1273,7 @@ public class CallManager {
    * @param hkdfExtraInfo              additional entropy to use for the connection with the SFU (it's okay if this is empty)
    * @param audioLevelsIntervalMs      if provided, the observer will receive audio level callbacks at this interval
    * @param audioProcessingMethod      the method to use for audio processing
+   * @param useOboe                    whether to use the oboe-based audio device module, otherwise use java
    * @param observer                   the observer that the group call object will use for callback notifications
    *
    * @throws CallException for native code failures
@@ -1278,13 +1287,14 @@ public class CallManager {
                                       @NonNull  byte[]                hkdfExtraInfo,
                                       @Nullable Integer               audioLevelsIntervalMs,
                                                 AudioProcessingMethod audioProcessingMethod,
+                                                boolean               useOboe,
                                       @NonNull  GroupCall.Observer    observer)
   {
     checkCallManagerExists();
 
     if (this.groupFactory == null) {
       // The first GroupCall object will create a factory that will be re-used.
-      this.groupFactory = this.createPeerConnectionFactory(null, audioProcessingMethod);
+      this.groupFactory = this.createPeerConnectionFactory(null, audioProcessingMethod, useOboe);
       if (this.groupFactory == null) {
         Log.e(TAG, "createPeerConnectionFactory failed");
         return null;
@@ -1557,9 +1567,15 @@ public class CallManager {
   }
 
   @CalledByNative
-  private void sendCallMessageToGroup(@NonNull byte[] groupId, @NonNull byte[] message, int urgency) {
+  private void sendCallMessageToGroup(@NonNull byte[] groupId, @NonNull byte[] message, int urgency, @NonNull List<byte[]> overrideRecipients) {
     Log.i(TAG, "sendCallMessageToGroup():");
-    observer.onSendCallMessageToGroup(groupId, message, CallMessageUrgency.values()[urgency]);
+
+    List<UUID> finalOverrideRecipients = new ArrayList<UUID>();
+    for (byte[] recipient : overrideRecipients) {
+      finalOverrideRecipients.add(Util.getUuidFromBytes(recipient));
+    }
+
+    observer.onSendCallMessageToGroup(groupId, message, CallMessageUrgency.values()[urgency], finalOverrideRecipients);
   }
 
   @CalledByNative
@@ -1772,6 +1788,20 @@ public class CallManager {
     groupCall.handleEnded(reason);
   }
 
+  @CalledByNative
+  private void handleSpeakingNotification(long clientId, GroupCall.SpeechEvent event) {
+    Log.i(TAG, "handleSpeakingNotification():");
+
+    GroupCall groupCall = this.groupCallByClientId.get(clientId);
+    if (groupCall == null) {
+      Log.w(TAG, "groupCall not found by clientId: " + clientId);
+      return;
+    }
+
+    groupCall.handleSpeakingNotification(event);
+  }
+
+
   /**
    *
    * Contains parameters for creating Connection objects
@@ -1814,7 +1844,7 @@ public class CallManager {
 
       // Create a video track that will be shared across all
       // connection objects.  It must be disposed manually.
-      if (cameraControl.hasCapturer()) {
+//      if (cameraControl.hasCapturer()) {
         this.videoSource = factory.createVideoSource(false);
         // Note: This must stay "video1" to stay in sync with V4 signaling.
         this.videoTrack  = factory.createVideoTrack("video1", videoSource);
@@ -1823,10 +1853,10 @@ public class CallManager {
         // Connect camera as the local video source.
         cameraControl.initCapturer(videoSource.getCapturerObserver());
         videoTrack.addSink(localSink);
-      } else {
-        this.videoSource = null;
-        this.videoTrack  = null;
-      }
+//      } else {
+//        this.videoSource = null;
+//        this.videoTrack  = null;
+//      }
 
     }
 
@@ -1922,6 +1952,12 @@ public class CallManager {
 
     /** The call ended because the application wanted to drop the call. */
     ENDED_APP_DROPPED_CALL,
+
+    /** The remote peer indicates its audio stream is enabled. */
+    REMOTE_AUDIO_ENABLE,
+
+    /** The remote peer indicates its audio stream is disabled. */
+    REMOTE_AUDIO_DISABLE,
 
     /** The remote peer indicates its video stream is enabled. */
     REMOTE_VIDEO_ENABLE,
@@ -2212,25 +2248,27 @@ public class CallManager {
 
     /**
      *
-     * A message that should be sent to the given user as a CallMessage.
+     * Send a generic call message to the given remote recipient.
      *
      * @param recipientUuid  UUID for the user to send the message to
      * @param message        the opaque bytes to send
-     * @param urgency        controls whether recipients should immediately handle this message.
-     *                       Affects out-of-app message processing.
+     * @param urgency        controls whether recipients should immediately handle this message
      */
     void onSendCallMessage(@NonNull UUID recipientUuid, @NonNull byte[] message, @NonNull CallMessageUrgency urgency);
 
     /**
      *
-     * A message that should be sent to all members of the given group as a CallMessage.
+     * Send a generic call message to a group. Send to all members of the group
+     * or, if overrideRecipients is not empty, send to the given subset of members
+     * using multi-recipient sealed sender. If the sealed sender request fails,
+     * clients should provide a fallback mechanism.
      *
-     * @param groupId                  the ID of the group in question
-     * @param message                  the opaque bytes to send
-     * @param urgency        controls whether recipients should immediately handle this message.
-     *                       Affects out-of-app message processing.
+     * @param groupId             the ID of the group in question
+     * @param message             the opaque bytes to send
+     * @param urgency             controls whether recipients should immediately handle this message
+     * @param overrideRecipients  a subset of group members to send to; if empty, send to all
      */
-    void onSendCallMessageToGroup(@NonNull byte[] groupId, @NonNull byte[] message, @NonNull CallMessageUrgency urgency);
+    void onSendCallMessageToGroup(@NonNull byte[] groupId, @NonNull byte[] message, @NonNull CallMessageUrgency urgency, @NonNull List<UUID> overrideRecipients);
 
     /**
      *
@@ -2401,6 +2439,10 @@ public class CallManager {
     throws CallException;
 
   private native
+    void ringrtcSetAudioEnable(long nativeCallManager, boolean enable)
+    throws CallException;
+
+  private native
     void ringrtcSetVideoEnable(long nativeCallManager, boolean enable)
     throws CallException;
 
@@ -2443,6 +2485,7 @@ public class CallManager {
                                byte[] rootKeyBytes,
                                byte[] adminPasskey,
                                byte[] callLinkPublicParams,
+                               int    restrictions,
                                long   requestId)
     throws CallException;
 

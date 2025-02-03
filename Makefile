@@ -15,7 +15,7 @@ OUTPUT_DIR ?= out
 
 BUILD_TYPES := release debug
 
-GN_ARCHS     := arm arm64 x86 x64
+GN_ARCHS     := arm
 
 ANDROID_TARGETS := $(foreach t, $(BUILD_TYPES),     \
 			$(foreach a, $(GN_ARCHS),   \
@@ -32,11 +32,11 @@ help:
 	$(Q) echo "  ios          -- download WebRTC and build for the iOS platform"
 	$(Q) echo "  android      -- download WebRTC and build for the Android platform"
 	$(Q) echo "  electron     -- build an Electron library"
-	$(Q) echo "  cli          -- build the test cli (1:1 calls)"
-	$(Q) echo "  gctc         -- build the test cli (group calls)"
-	$(Q) echo "  call_sim-cli -- build the call simulator cli for testing"
+	$(Q) echo "  direct       -- build the direct/1:1 call test cli"
+	$(Q) echo "  gctc         -- build the group call test cli"
+	$(Q) echo "  call_sim-cli -- build the call simulator test cli"
 	$(Q) echo
-	$(Q) echo "For the electon/cli/gctc builds, you can specify an optional platform"
+	$(Q) echo "For the electron/cli/gctc builds, you can specify an optional platform"
 	$(Q) echo "which will download WebRTC. For example:"
 	$(Q) echo "  $ make electron PLATFORM=unix"
 	$(Q) echo
@@ -80,12 +80,12 @@ electron:
 	fi
 	$(Q) if [ "$(TYPE)" = "debug" ] ; then \
 		echo "Electron: Debug build" ; \
-		TARGET_ARCH=$(NODEJS_ARCH) BUILD_WHAT=$(BUILD_WHAT) ./bin/build-electron -d ; \
+		TARGET_ARCH=$(NODEJS_ARCH) BUILD_WHAT=$(BUILD_WHAT) BUILD_WEBRTC_TESTS=$(BUILD_WEBRTC_TESTS) ./bin/build-electron -d ; \
 	else \
 		echo "Electron: Release build" ; \
-		TARGET_ARCH=$(NODEJS_ARCH) BUILD_WHAT=$(BUILD_WHAT) ./bin/build-electron -r ; \
+		TARGET_ARCH=$(NODEJS_ARCH) BUILD_WHAT=$(BUILD_WHAT) BUILD_WEBRTC_TESTS=$(BUILD_WEBRTC_TESTS) ./bin/build-electron -r ; \
 	fi
-	$(Q) (cd src/node && yarn install && yarn build)
+	$(Q) (cd src/node && npm install && npm run build)
 
 cli:
 	$(Q) if [ "$(PLATFORM)" != "" ] ; then \
@@ -94,10 +94,10 @@ cli:
 	fi
 	$(Q) if [ "$(TYPE)" = "release" ] ; then \
 		echo "cli: Release build" ; \
-		./bin/build-cli -r ; \
+		./bin/build-direct -r ; \
 	else \
 		echo "cli: Debug build" ; \
-		./bin/build-cli -d ; \
+		./bin/build-direct -d ; \
 	fi
 
 gctc:
@@ -131,7 +131,7 @@ clean:
 	$(Q) ./bin/build-aar --clean
 	$(Q) ./bin/build-ios --clean
 	$(Q) ./bin/build-electron --clean
-	$(Q) ./bin/build-cli --clean
+	$(Q) ./bin/build-direct --clean
 	$(Q) ./bin/build-gctc --clean
 	$(Q) ./bin/build-call_sim-cli --clean
 	$(Q) rm -rf ./src/webrtc/src/out
