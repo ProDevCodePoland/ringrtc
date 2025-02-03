@@ -45,13 +45,9 @@ jobs:
     - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
       if: ${{ inputs.dry_run }}
 
-    - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
-      if: ${{ !inputs.dry_run }}
-      env:
-        ORG_GRADLE_PROJECT_signalSonatypeUsername: ${{ secrets.SONATYPE_USER }}
-        ORG_GRADLE_PROJECT_signalSonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
-        # The last 8 characters of the key ID
-        ORG_GRADLE_PROJECT_signingKeyId: ${{ secrets.SIGNING_KEYID }}
-        ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
-        # ASCII-armored PGP secret key
-        ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
+   
+    - name: Publish artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: android-artifacts
+        path: /home/runner/work/ringrtc/ringrtc/out/**/*.aar
