@@ -4,28 +4,10 @@ run-name: Build RingRTC Android Artifacts (${{ github.ref_name }})
 on:
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "When true, don't upload to Sonatype"
-        default: false
-        required: false
-        type: boolean
       runner:
         description: "Linux runner:"
-        default: 'ubuntu-24.04-4-cores'
+        default: 'ubuntu-latest'
         required: true
-        type: string
-  workflow_call:
-    inputs:
-      dry_run:
-        description: "When true, don't upload to Sonatype"
-        default: true
-        required: true
-        type: boolean
-      runner:
-        description: "Linux runner:"
-        default: 'ubuntu-24.04-4-cores'
-        required: true
-        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -56,16 +38,10 @@ jobs:
 
       - run: ./bin/fetch-artifact --platform android --release
 
-    - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
-      if: ${{ inputs.dry_run }}
+      - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
 
-    - run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./bin/build-aar --ringrtc-only --release
-      if: ${{ !inputs.dry_run }}
-      env:
-        ORG_GRADLE_PROJECT_signalSonatypeUsername: ${{ secrets.SONATYPE_USER }}
-        ORG_GRADLE_PROJECT_signalSonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
-        # The last 8 characters of the key ID
-        ORG_GRADLE_PROJECT_signingKeyId: ${{ secrets.SIGNING_KEYID }}
-        ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
-        # ASCII-armored PGP secret key
-        ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
+      - name: Publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: /home/runner/work/ringrtc/ringrtc/out/**/*.aar
